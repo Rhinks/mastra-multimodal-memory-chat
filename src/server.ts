@@ -4,6 +4,7 @@ import { cors } from '@elysiajs/cors'
 import { mastra } from './mastra/index.js';
 import { chatAgent } from './mastra/agents/chatAgent';
 import { createClient } from '@supabase/supabase-js'
+import { RuntimeContext } from '@mastra/core/runtime-context';
 const app = new Elysia()
     .use(cors())
 
@@ -32,6 +33,14 @@ const app = new Elysia()
                 process.env.SUPABASE_ANON_KEY!
             );
 
+            console.log(' Chat request - User:', body.userId, 'Session:', sessionId);
+            console.log(' Message:', message);
+
+            // Create RuntimeContext for tools
+            const runtimeContext = new RuntimeContext();
+            runtimeContext.set('username', body.userId.toString());
+            runtimeContext.set('excludeSessionId', sessionId);
+
             // Fire-and-forget: save user message to supabase (non-blocking)
             const saveUserMessage = supabase
                 .from('conversations')
@@ -48,13 +57,21 @@ const app = new Elysia()
                 });
 
             // Call mastra agent (this is the main blocking operation)
-            const response = await agent.generate(message,
-                {
-                    memory: {
+            const response = await agent.generate(message, {
+                memory: {
                     thread: sessionId,
                     resource: body.userId.toString(),
                 },
+                runtimeContext: runtimeContext,
             })
+
+            console.log(' Agent response received');
+            // Log tool calls if any
+            if (response.toolCalls && response.toolCalls.length > 0) {
+                console.log('🔧 Tools called:', response.toolCalls.map((tc: any) => tc.toolName || tc.name || 'unknown').join(', '));
+            } else {
+                console.log('⚠️ NO TOOLS WERE CALLED BY THE AGENT');
+            }
 
             // Fire-and-forget: save assistant response to supabase (non-blocking)
             const saveAssistantMessage = supabase
@@ -90,6 +107,7 @@ const app = new Elysia()
             body: t.Object({
                 message: t.String({ description: 'User message to the chatbot', example: 'Hello, how are you?' }),
                 userId: t.String({ description: 'ID of the user sending the message', example: 'rushbh' }),
+                documents: t.Optional(t.Files( { description: 'Optional documents to assist the agent' }))
             }),
 
 
