@@ -1,4 +1,4 @@
-# rag-hybrid-memory-arc
+# mastra-multimodal-memory-chat
 
 To install dependencies:
 
