@@ -2,9 +2,14 @@ import {Elysia, t} from 'elysia';
 import {swagger} from '@elysiajs/swagger';
 import { cors } from '@elysiajs/cors' 
 import { mastra } from './mastra/index.js';
-import { chatAgent } from './mastra/agents/chatAgent';
+import { chatAgent } from './mastra/agents/chatAgent.js';
 import { createClient } from '@supabase/supabase-js'
 import { RuntimeContext } from '@mastra/core/runtime-context';
+import { chunkText, extractTextFromDocument } from './services/extractor.js';
+import { generateEmbeddingsBatch } from './services/embeddings.js';
+import { storeDocumentChunks } from './services/vectorStore.js';
+
+
 const app = new Elysia()
     .use(cors())
 
@@ -25,13 +30,62 @@ const app = new Elysia()
     .post('/chat', 
         async ({body, headers}) => {
             const sessionId = headers['x-session-id'] as string;
-            const {message} = body as {message: string};
+            const {message, documents} = body;
 
-            const agent = mastra.getAgent("chatAgent");
+            // Create supabase client for document checking
             const supabase = createClient(
                 process.env.SUPABASE_URL!,
                 process.env.SUPABASE_ANON_KEY!
             );
+
+            //check if documents were uploaded
+            if (documents && documents.length > 0) {
+                
+                //process each document
+                for (const doc of documents) {
+                    try {
+                        // Check if document already exists for this user
+                        const { data: existingDoc } = await supabase
+                            .from('documents')
+                            .select('id')
+                            .eq('username', body.userId)
+                            .eq('filename', doc.name)
+                            .limit(1);
+
+                        if (existingDoc && existingDoc.length > 0) {
+                            console.log(`📄 Document ${doc.name} already exists for user ${body.userId}, skipping...`);
+                            continue;
+                        }
+
+                        console.log(` Processing uploaded document: ${doc.name} (${doc.size} bytes)`);
+
+                    const buffer = Buffer.from(await doc.arrayBuffer());
+
+                    const text = await extractTextFromDocument(buffer);
+                    console.log(` Extracted text length: ${text.length} characters`);
+
+                    const chunks = chunkText(text);
+                    console.log(` Created ${chunks.length} text chunks from document`);
+
+                    const embeddings = await generateEmbeddingsBatch(chunks);
+                    console.log(` Generated embeddings for ${embeddings.length} chunks`);
+
+                    await storeDocumentChunks(
+                        body.userId.toString(),
+                        doc.name,
+                        chunks,
+                        embeddings
+                    );
+
+                    console.log(` Stored document chunks and embeddings in vector store`);}
+                    catch (err) {
+                        console.error(` Error processing document ${doc.name}:`, err);
+                    }
+                }
+            }
+            
+            //get mastra chat agent
+            const agent = mastra.getAgent("chatAgent");
 
             console.log(' Chat request - User:', body.userId, 'Session:', sessionId);
             console.log(' Message:', message);
@@ -40,6 +94,7 @@ const app = new Elysia()
             const runtimeContext = new RuntimeContext();
             runtimeContext.set('username', body.userId.toString());
             runtimeContext.set('excludeSessionId', sessionId);
+            runtimeContext.set('query', message);
 
             // Fire-and-forget: save user message to supabase (non-blocking)
             const saveUserMessage = supabase
@@ -55,7 +110,7 @@ const app = new Elysia()
                 .then(({ error }) => {
                     if (error) console.error('Error saving user message:', error);
                 });
-
+``
             // Call mastra agent (this is the main blocking operation)
             const response = await agent.generate(message, {
                 memory: {
@@ -100,6 +155,7 @@ const app = new Elysia()
             };
         },
         {
+            type: 'multipart/form-data',
             // request validation schema
             headers: t.Object({
                 'x-session-id': t.String({ description: 'Session ID for the chat', example: 'session_1' })
