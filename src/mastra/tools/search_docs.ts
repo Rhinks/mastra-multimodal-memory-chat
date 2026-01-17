@@ -8,9 +8,9 @@ import { searchDocuments } from "../../services/vectorStore";
 
 export const searchDocs = createTool({
   id: "search-docs",
-  description: "Search documents using semantic search and knowledge graph entities",
+  description: "Search user documents using semantic search. Always call rewrite-query first to optimize the search query.",
   inputSchema: z.object({
-    query: z.string().describe("The search query string"),
+    query: z.string().describe("The search query string (preferably rewritten for better results)"),
   }),
   
   execute: async (params) => {
@@ -24,13 +24,24 @@ export const searchDocs = createTool({
       console.log('🔍 SEARCH-DOCS TOOL CALLED!');
       console.log('========================================');
       console.log('🔍 Username:', username);
-      console.log('🔍 Query:', query)
+      console.log('🔍 Query (for embedding):', query)
       
-      const embedding = await generateEmbeddings(query);
-      console.log('🔍 Generated embedding vector of length:', embedding.length);
-      const results = await searchDocuments(username, embedding, 5);
-      console.log('🔍 Search results found:', results.count);
-      return results;
+      try {
+        const embedding = await generateEmbeddings(query);
+        console.log('🔍 Generated embedding vector of length:', embedding.length);
+        const results = await searchDocuments(username, embedding, 5);
+        console.log('🔍 Search results found:', results.count);
+        
+        if (!results.data || results.data.length === 0) {
+          console.log('🔍 No results found for this query');
+          return `No documents found matching: "${query}". Try a different query or check if documents have been uploaded.`;
+        }
+        
+        return results;
+      } catch (error) {
+        console.error('🔍 Search error:', error);
+        return `Error searching documents: ${error}`;
+      }
 }});
 
 
