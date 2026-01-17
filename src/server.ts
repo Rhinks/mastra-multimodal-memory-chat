@@ -12,7 +12,6 @@ import { storeDocumentChunks } from './services/vectorStore.js';
 
 const app = new Elysia()
     .use(cors())
-
     .use(swagger({
         documentation:{
             info:{
@@ -31,6 +30,8 @@ const app = new Elysia()
         async ({body, headers}) => {
             const sessionId = headers['x-session-id'] as string;
             const {message, documents} = body;
+            
+            console.log(` Documents uploaded: ${documents ? documents.length : 0}`);
 
             // Create supabase client for document checking
             const supabase = createClient(
@@ -40,6 +41,7 @@ const app = new Elysia()
 
             //check if documents were uploaded
             if (documents && documents.length > 0) {
+                console.log(`📄 ${documents.length} document(s) uploaded for processing`);
                 
                 //process each document
                 for (const doc of documents) {
@@ -90,7 +92,7 @@ const app = new Elysia()
             console.log(' Chat request - User:', body.userId, 'Session:', sessionId);
             console.log(' Message:', message);
 
-            // Create RuntimeContext for tools
+            // Create RuntimeContext for toolsi
             const runtimeContext = new RuntimeContext();
             runtimeContext.set('username', body.userId.toString());
             runtimeContext.set('excludeSessionId', sessionId);
@@ -111,48 +113,64 @@ const app = new Elysia()
                     if (error) console.error('Error saving user message:', error);
                 });
 ``
-            // Call mastra agent (this is the main blocking operation)
-            const response = await agent.generate(message, {
+            // Call mastra agent with streaming
+            const stream = await agent.stream(message, {
                 memory: {
                     thread: sessionId,
                     resource: body.userId.toString(),
                 },
                 runtimeContext: runtimeContext,
-            })
+            });
 
-            console.log(' Agent response received');
-            // Log tool calls if any
-            if (response.toolCalls && response.toolCalls.length > 0) {
-                console.log('🔧 Tools called:', response.toolCalls.map((tc: any) => tc.toolName || tc.name || 'unknown').join(', '));
-            } else {
-                console.log('⚠️ NO TOOLS WERE CALLED BY THE AGENT');
-            }
-
-            // Fire-and-forget: save assistant response to supabase (non-blocking)
-            const saveAssistantMessage = supabase
-                .from('conversations')
-                .insert([
-                    {
-                        session_id: sessionId,
-                        username: body.userId,
-                        role: 'assistant',
-                        content: response.text,
-                    }
-                ])
-                .then(({ error }) => {
-                    if (error) console.error('Error saving assistant message:', error);
-                });
-
-            // Optionally wait for both saves to complete before returning
-            // Remove this line if you want true fire-and-forget
-            // await Promise.all([saveUserMessage, saveAssistantMessage])
+            // Collect full response while streaming to client
+            let fullText = '';
             
-            return {
-                sessionId,
-                userName: body.userId.toString(), // placeholder, replace with actual user name from supabase
-                userMessage: message,
-                assistantMessage: response.text,
-            };
+            // Return SSE stream
+            return new Response(
+                new ReadableStream({
+                    async start(controller) {
+                        try {
+                            for await (const chunk of stream.textStream) {
+                                fullText += chunk;
+                                // Send chunk as SSE
+                                controller.enqueue(
+                                    new TextEncoder().encode(`data: ${JSON.stringify({ chunk })}\n\n`)
+                                );
+                            }
+                            
+                            // Save full response after streaming completes
+                            supabase
+                                .from('conversations')
+                                .insert([
+                                    {
+                                        session_id: sessionId,
+                                        username: body.userId,
+                                        role: 'assistant',
+                                        content: fullText,
+                                    }
+                                ])
+                                .then(({ error }) => {
+                                    if (error) console.error('Error saving assistant message:', error);
+                                });
+                            
+                            // Send completion marker
+                            controller.enqueue(
+                                new TextEncoder().encode(`data: ${JSON.stringify({ done: true, fullText })}\n\n`)
+                            );
+                            controller.close();
+                        } catch (error) {
+                            controller.error(error);
+                        }
+                    }
+                }),
+                {
+                    headers: {
+                        'Content-Type': 'text/event-stream',
+                        'Cache-Control': 'no-cache',
+                        'Connection': 'keep-alive',
+                    },
+                }
+            ); 
         },
         {
             type: 'multipart/form-data',
@@ -165,14 +183,6 @@ const app = new Elysia()
                 userId: t.String({ description: 'ID of the user sending the message', example: 'rushbh' }),
                 documents: t.Optional(t.Files( { description: 'Optional documents to assist the agent' }))
             }),
-
-
-            response: t.Object({
-                sessionId: t.String(),
-                userName: t.String(),
-                userMessage: t.String(),
-                assistantMessage: t.String(),
-            })
         }
     )
 
@@ -180,3 +190,5 @@ const app = new Elysia()
 
 console.log(`Server running at http://localhost:${app.server?.port}`);
 console.log(`Swagger docs available at http://localhost:${app.server?.port}/swagger`);
+
+
