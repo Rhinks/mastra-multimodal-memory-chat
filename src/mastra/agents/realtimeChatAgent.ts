@@ -1,8 +1,8 @@
 import { Agent } from "@mastra/core/agent";
 import { Memory } from "@mastra/memory";
-import { OpenAIVoice } from "@mastra/voice-openai";
+import { OpenAIRealtimeVoice } from "@mastra/voice-openai-realtime";
 
-// Tools
+// Import shared resources
 import { retrieveRecentConversation } from "../tools/retrieve_recent_conversation";
 import { searchDocs } from "../tools/search_docs";
 import { queryKnowledgeGraphTool } from "../tools/query_kg";
@@ -102,18 +102,13 @@ const sharedTools = [
   rewriteQuery
 ];
 
-// Regular chat agent with Whisper + TTS
-export const chatAgent = new Agent({
-  name: "chatAgent",
-  voice: new OpenAIVoice({
-    listeningModel: {
-      name: "whisper-1",
-      apiKey: process.env.OPENAI_API_KEY!,
-    },
-    speechModel: {
-      name: "tts-1",
-      apiKey: process.env.OPENAI_API_KEY!,
-    },
+// Realtime voice agent with low-latency WebSocket
+export const realtimeChatAgent = new Agent({
+  name: "realtimeChatAgent",
+  voice: new OpenAIRealtimeVoice({
+    apiKey: process.env.OPENAI_API_KEY!,
+    model: "gpt-4o-mini-realtime-preview-2024-12-17",
+    speaker: "alloy",
   }),
   instructions: sharedInstructions,
   model: "openai/gpt-4o-mini",

@@ -3,8 +3,9 @@ import { Mastra } from '@mastra/core/mastra';
 import { PinoLogger } from '@mastra/loggers';
 import { LibSQLStore } from '@mastra/libsql';
 import { chatAgent } from './agents/chatAgent';
+import { realtimeChatAgent } from './agents/realtimeChatAgent';
 export const mastra = new Mastra({
-  agents: { chatAgent },
+  agents: { chatAgent, realtimeChatAgent},
   storage: new LibSQLStore({
     // stores observability, scores, ... into memory storage, if it needs to persist, change to file:../mastra.db
     url: ":memory:",
